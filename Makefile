@@ -1,8 +1,14 @@
 progenitor_organism.o: progenitor_organism.s
 	nasm $< -o $@
 
-progenitor_organism.elf: progenitor_organism.s
-	nasm -f elf64 $< -o $@
+elfbootstrap: empty.s
+	nasm -f elf64 -o $@ $<
+
+%.elf: %.o elfbootstrap
+	objcopy --add-section sname=$< elfbootstrap $@
+
+disassemble_%: %.elf
+	objdump -D $<
 
 environment: environment.c progenitor_organism.o
 	gcc -g -o $@ $<
