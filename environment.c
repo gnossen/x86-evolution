@@ -1,8 +1,10 @@
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #define PER_ORGANISM_BUFFER_SIZE 256
 
@@ -64,8 +66,8 @@ problem_t setup_buffer(void *buffer) {
 }
 
 uint16_t score_buffer(const void *buffer, problem_t problem) {
-  printf("Buffer: %d\n", ((problem_t *)buffer)->c);
-  printf("Problem: %d\n", problem.c);
+  // printf("Buffer: %d\n", ((problem_t *)buffer)->c);
+  // printf("Problem: %d\n", problem.c);
   if (((problem_t *)buffer)->c >= problem.c) {
     return ((problem_t *)buffer)->c - problem.c;
   } else {
@@ -73,19 +75,61 @@ uint16_t score_buffer(const void *buffer, problem_t problem) {
   }
 }
 
+typedef struct organism_t {
+  genome_t *genome;
+  problem_t problem;
+  void *buffer;
+} organism_t;
+
+organism_t *create_organism(const char *genome_path) {
+  organism_t *organism = malloc(sizeof(organism_t));
+  organism->genome = load_genome(genome_path);
+  organism->buffer = malloc(PER_ORGANISM_BUFFER_SIZE);
+  memset(organism->buffer, 0, PER_ORGANISM_BUFFER_SIZE);
+  organism->problem = setup_buffer(organism->buffer);
+  return organism;
+}
+
+void free_organism(organism_t *organism) {
+  free_genome(organism->genome);
+  free(organism->buffer);
+  free(organism);
+}
+
+// This function donates the calling thread to the execution of the organism.
+void *run_organism(void *arg) {
+  // TODO: Handle segfaults.
+  organism_t *organism = (organism_t *)arg;
+  organism->genome->executable(organism->buffer);
+  return NULL;
+}
+
+void spawn_organism(const char *genome_path) {
+  organism_t *organism = create_organism(genome_path);
+  // printf("Before: ");
+  // print_buffer(organism->buffer, PER_ORGANISM_BUFFER_SIZE);
+  // printf("After: ");
+  // print_buffer(organism->buffer, PER_ORGANISM_BUFFER_SIZE);
+
+  pthread_t tid;
+  int ret = pthread_create(&tid, NULL, run_organism, organism);
+  if (ret != 0) {
+    fprintf(stderr, "Failed to spawn new thread for organism.\n");
+    exit(1);
+  }
+
+  for (size_t i = 0; i < 10; ++i) {
+    usleep(500000);
+
+    // TODO: Do this scoring asynchronously.
+    printf("Score: %d\n", score_buffer(organism->buffer, organism->problem));
+    organism->problem = setup_buffer(organism->buffer);
+  }
+  free_organism(organism);
+}
+
 int main(int argc, char **argv) {
   srand(0);
-  genome_t *genome = load_genome("progenitor_organism.o");
-  void *organism_buffer = malloc(PER_ORGANISM_BUFFER_SIZE);
-  memset(organism_buffer, 0, PER_ORGANISM_BUFFER_SIZE);
-  problem_t problem = setup_buffer(organism_buffer);
-  printf("Before: ");
-  print_buffer(organism_buffer, PER_ORGANISM_BUFFER_SIZE);
-  genome->executable(organism_buffer);
-  printf("After: ");
-  print_buffer(organism_buffer, PER_ORGANISM_BUFFER_SIZE);
-  printf("Score: %d\n", score_buffer(organism_buffer, problem));
-  free(organism_buffer);
-  free_genome(genome);
+  spawn_organism("progenitor_organism.o");
   return 0;
 }

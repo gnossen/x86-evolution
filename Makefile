@@ -11,4 +11,6 @@ disassemble_%: %.elf
 	objdump -D $<
 
 environment: environment.c progenitor_organism.o
-	gcc -g -o $@ $<
+	gcc -g -lpthread -o $@ $<
+
+
