@@ -12,8 +12,6 @@
 #include <unistd.h>
 
 #define PER_ORGANISM_BUFFER_SIZE 256
-#define FITNESS_WINDOW_SIZE 16
-#define MAX_ERROR 0.95
 
 const int g_resumable_signals[] = {
     SIGABRT, SIGALRM, SIGBUS, SIGCHLD, SIGCONT, SIGFPE, SIGHUP, SIGILL, SIGINT,
@@ -61,70 +59,10 @@ void free_genome(genome_t *genome) {
   free(genome);
 }
 
-// The problem is to set c = 10 * (a + b).
-typedef struct problem_t {
-  uint8_t a;
-  uint8_t b;
-  uint16_t c;
-} problem_t;
-
-problem_t setup_buffer(void *buffer) {
-  problem_t problem;
-
-  // We don't want to ever get a zero result, as this would cause division by
-  // zero in the scoring procedure.
-  problem.a = (uint8_t)(rand() % 11) + 1;
-  problem.b = (uint8_t)(rand() % 11) + 1;
-  problem.c =
-      (uint16_t)((uint16_t)problem.a + (uint16_t)problem.b) * (uint16_t)10;
-  problem_t *buffer_problem = (problem_t *)buffer;
-  buffer_problem->a = problem.a;
-  buffer_problem->b = problem.b;
-  return problem;
-}
-
-double score_buffer(const void *buffer, problem_t problem) {
-  printf("Buffer: %d\n", ((problem_t *)buffer)->c);
-  printf("Problem: %d\n", problem.c);
-
-  return fabs((double)((problem_t *)buffer)->c - problem.c) / (double)problem.c;
-}
-
-// Circular array to store fitnesses.
-typedef struct fitness_t {
-  uint64_t epoch;
-  double data[FITNESS_WINDOW_SIZE];
-} fitness_t;
-
-fitness_t *create_fitness() {
-  fitness_t *fitness = malloc(sizeof(fitness_t));
-  fitness->epoch = 0;
-  memset(fitness->data, 0, FITNESS_WINDOW_SIZE * sizeof(double));
-  return fitness;
-}
-
-void fitness_add(fitness_t *fitness, double datum) {
-  fitness->data[fitness->epoch++ % FITNESS_WINDOW_SIZE] = datum;
-}
-
-double fitness_average(fitness_t *fitness) {
-  double average = 0.0;
-  size_t size = fitness->epoch < FITNESS_WINDOW_SIZE ? fitness->epoch
-                                                     : FITNESS_WINDOW_SIZE;
-  for (size_t i = 0; i < size; ++i) {
-    // printf("Adding %f to average\n", fitness->data[i] / (double)size);
-    average += fitness->data[i] / (double)size;
-  }
-  // printf("Returning average %f\n", average);
-  return average;
-}
-
 typedef struct organism_t {
   genome_t *genome;
-  problem_t problem;
   void *buffer;
   pthread_t tid;
-  fitness_t *fitness;
 } organism_t;
 
 organism_t *create_organism(const char *genome_path) {
@@ -132,16 +70,14 @@ organism_t *create_organism(const char *genome_path) {
   organism->genome = load_genome(genome_path);
   organism->buffer = malloc(PER_ORGANISM_BUFFER_SIZE);
   memset(organism->buffer, 0, PER_ORGANISM_BUFFER_SIZE);
-  organism->problem = setup_buffer(organism->buffer);
+  // TODO: Set up problem in God process.
   organism->tid = (pthread_t)-1;
-  organism->fitness = create_fitness();
   return organism;
 }
 
 void free_organism(organism_t *organism) {
   free_genome(organism->genome);
   free(organism->buffer);
-  free(organism->fitness);
   free(organism);
 }
 
@@ -157,7 +93,6 @@ void organism_kill_handler(int sig) {
     signal(g_resumable_signals[i], SIG_IGN);
   }
   pthread_exit(NULL);
-  fprintf(stderr, "Called pthread_exit\n");
 }
 
 void organism_signal_handler(int cause, siginfo_t *info, void *uap) {
@@ -228,36 +163,24 @@ void spawn_organism(const char *genome_path) {
     exit(1);
   }
 
-  // TODO: Pull this up a level in the hierarchy and manage multiple organisms.
+  sleep(2);
+
+  // // TODO: Pull this up a level in the hierarchy and manage multiple organisms.
   for (size_t i = 0; i < 5; ++i) {
     usleep(500000);
-    double accuracy_score = score_buffer(organism->buffer, organism->problem);
-    fitness_add(organism->fitness, accuracy_score);
-    printf("Current score: %f\n", accuracy_score);
-    double average = fitness_average(organism->fitness);
-    printf("Average score: %f\n", average);
-    if (average > MAX_ERROR) {
-      pthread_kill(organism->tid, SIGTERM);
-    }
-    organism->problem = setup_buffer(organism->buffer);
+    print_buffer(organism->buffer, PER_ORGANISM_BUFFER_SIZE);
   }
 
-  pthread_kill(organism->tid, SIGTERM);
+  pthread_exit(NULL);
 
-  for (size_t i = 0; i < 5; ++i) {
-    usleep(500000);
-    double accuracy_score = score_buffer(organism->buffer, organism->problem);
-    fitness_add(organism->fitness, accuracy_score);
-    printf("Current score: %f\n", accuracy_score);
-    double average = fitness_average(organism->fitness);
-    printf("Average score: %f\n", average);
-    if (average > MAX_ERROR) {
-      pthread_kill(organism->tid, SIGTERM);
-    }
-    organism->problem = setup_buffer(organism->buffer);
-  }
+  // pthread_kill(organism->tid, SIGTERM);
 
-  free_organism(organism);
+  // for (size_t i = 0; i < 5; ++i) {
+  //   usleep(500000);
+  //   print_buffer(organism->buffer, PER_ORGANISM_BUFFER_SIZE);
+  // }
+
+  // free_organism(organism);
 }
 
 int main(int argc, char **argv) {

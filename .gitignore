@@ -2,3 +2,5 @@
 *.elf
 elfbootstrap
 environment
+god
+organism_runner
