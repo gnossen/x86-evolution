@@ -2,11 +2,19 @@ BITS 64
 
 loop:
     movzx bx, BYTE[rax]
+    nop
     movzx cx, BYTE [rax+1]
+    nop
+    mov rdx, 0x0
+    nop
+    mov dx, WORD [rdx] ; Generates sigsegv.
+    nop
     add bx, cx
+    nop
     mov WORD [rax+2], bx
+    nop
     jmp loop
-    ret
+
 
     ; Ideal Solution
     ; movzx bx, BYTE[rax]

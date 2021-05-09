@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <math.h>
 #include <pthread.h>
 #include <signal.h>
@@ -6,11 +8,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/ucontext.h>
 #include <unistd.h>
 
 #define PER_ORGANISM_BUFFER_SIZE 256
 #define FITNESS_WINDOW_SIZE 16
-#define MAX_ERROR 200
+#define MAX_ERROR 0.95
+
+const int g_resumable_signals[] = {
+    SIGABRT, SIGALRM, SIGBUS, SIGCHLD, SIGCONT, SIGFPE, SIGHUP, SIGILL, SIGINT,
+    /* _not_ SIGKILL */
+    SIGPIPE, SIGPOLL, SIGQUIT, SIGSEGV, SIGSTOP, SIGSYS,
+    /* _not_ SIGTRAP. We want this for debugging */
+};
 
 typedef void (*executable_t)(void *);
 
@@ -137,19 +147,67 @@ void free_organism(organism_t *organism) {
 
 __thread organism_t *g_organism = NULL;
 
-void organism_signal_handler(int sig) {
-  fprintf(stderr, "Caught signal %d in organism %p. Terminating.\n", sig,
-          g_organism);
+void organism_kill_handler(int sig) {
+  (void)sig;
+  // TODO: No stdlib function calls in a signal handler.
+  fprintf(stderr, "Organism %p terminated by environment.\n", g_organism);
+  // TODO: May have to clear all other signal handlers before exiting the
+  // thread.
+  for (size_t i = 0; i < sizeof(g_resumable_signals); ++i) {
+    signal(g_resumable_signals[i], SIG_IGN);
+  }
   pthread_exit(NULL);
+  fprintf(stderr, "Called pthread_exit\n");
+}
+
+void organism_signal_handler(int cause, siginfo_t *info, void *uap) {
+  (void)cause;
+  (void)info;
+  ucontext_t *context = uap;
+  // printf("Signal '%s' with RIP 0x%llx (executable + 0x%llx)\n",
+  // strsignal(cause), context->uc_mcontext.gregs[REG_RIP],
+  // context->uc_mcontext.gregs[REG_RIP] - (long long
+  // int)g_organism->genome->executable); Seek to the next nop.
+  int found_nop = 0;
+  uint8_t *byte;
+  for (byte = (uint8_t *)context->uc_mcontext.gregs[REG_RIP] + 1;
+       byte >= (uint8_t *)context->uc_mcontext.gregs[REG_RIP] &&
+       byte < (uint8_t *)((uint64_t)context->uc_mcontext.gregs[REG_RIP] +
+                          g_organism->genome->size);
+       ++byte) {
+    if (*byte == 0x90) {
+      found_nop = 1;
+      break;
+    }
+  }
+  if (found_nop) {
+    context->uc_mcontext.gregs[REG_RIP] = (greg_t)byte;
+  } else {
+    context->uc_mcontext.gregs[REG_RIP] =
+        (greg_t)g_organism->genome->executable;
+  }
+  // printf("Set RIP to 0x%llx (executable + 0x%llx)\n",
+  // context->uc_mcontext.gregs[REG_RIP], context->uc_mcontext.gregs[REG_RIP] -
+  // (long long int)g_organism->genome->executable);
 }
 
 // This function donates the calling thread to the execution of the organism.
 void *run_organism(void *arg) {
-  struct sigaction action;
-  action.sa_handler = organism_signal_handler;
-  sigemptyset(&action.sa_mask);
-  action.sa_flags = 0;
-  sigaction(SIGSEGV, &action, NULL);
+  struct sigaction kill_action;
+  kill_action.sa_handler = organism_kill_handler;
+  sigemptyset(&kill_action.sa_mask);
+  kill_action.sa_flags = 0;
+  sigaction(SIGTERM, &kill_action, NULL);
+  sigaction(SIGKILL, &kill_action, NULL);
+
+  struct sigaction general_action;
+  general_action.sa_sigaction = organism_signal_handler;
+  sigemptyset(&general_action.sa_mask);
+  general_action.sa_flags = SA_SIGINFO;
+  for (size_t i = 0; i < sizeof(g_resumable_signals); ++i) {
+    sigaction(g_resumable_signals[i], &general_action, NULL);
+  }
+
   organism_t *organism = (organism_t *)arg;
   g_organism = organism;
   organism->genome->executable(organism->buffer);
@@ -178,7 +236,22 @@ void spawn_organism(const char *genome_path) {
     double average = fitness_average(organism->fitness);
     printf("Average score: %f\n", average);
     if (average > MAX_ERROR) {
-      pthread_kill(organism->tid, SIGSEGV);
+      pthread_kill(organism->tid, SIGTERM);
+    }
+    organism->problem = setup_buffer(organism->buffer);
+  }
+
+  pthread_kill(organism->tid, SIGTERM);
+
+  for (size_t i = 0; i < 5; ++i) {
+    usleep(500000);
+    double accuracy_score = score_buffer(organism->buffer, organism->problem);
+    fitness_add(organism->fitness, accuracy_score);
+    printf("Current score: %f\n", accuracy_score);
+    double average = fitness_average(organism->fitness);
+    printf("Average score: %f\n", average);
+    if (average > MAX_ERROR) {
+      pthread_kill(organism->tid, SIGTERM);
     }
     organism->problem = setup_buffer(organism->buffer);
   }
