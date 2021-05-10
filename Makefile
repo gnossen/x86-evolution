@@ -17,4 +17,4 @@ organism_runner: organism_runner.c progenitor_organism.o
 	gcc -g -Wall -Wextra -Wconversion -Werror -lpthread -o $@ $<
 
 god: god.cc organism_runner
-	g++ -g -Wall -Wextra -Werror -o $@ $<
+	g++ -g -Wall -Wextra -Werror -lpthread -o $@ $<

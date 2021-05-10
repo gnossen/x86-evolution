@@ -16,7 +16,7 @@
 const int g_resumable_signals[] = {
     SIGABRT, SIGALRM, SIGBUS, SIGCHLD, SIGCONT, SIGFPE, SIGHUP, SIGILL, SIGINT,
     /* _not_ SIGKILL */
-    SIGPIPE, SIGPOLL, SIGQUIT, SIGSEGV, SIGSTOP, SIGSYS,
+    SIGPIPE, SIGPOLL, SIGQUIT, SIGSEGV, SIGSYS,
     /* _not_ SIGTRAP. We want this for debugging */
 };
 
@@ -133,15 +133,20 @@ void *run_organism(void *arg) {
   kill_action.sa_handler = organism_kill_handler;
   sigemptyset(&kill_action.sa_mask);
   kill_action.sa_flags = 0;
-  sigaction(SIGTERM, &kill_action, NULL);
-  sigaction(SIGKILL, &kill_action, NULL);
+  if (sigaction(SIGTERM, &kill_action, NULL) == -1)  {
+    fprintf(stderr, "Failed to set SIGTERM handler\n");
+    exit(1);
+  }
 
   struct sigaction general_action;
   general_action.sa_sigaction = organism_signal_handler;
   sigemptyset(&general_action.sa_mask);
   general_action.sa_flags = SA_SIGINFO;
-  for (size_t i = 0; i < sizeof(g_resumable_signals); ++i) {
-    sigaction(g_resumable_signals[i], &general_action, NULL);
+  for (size_t i = 0; i < sizeof(g_resumable_signals) / sizeof(int); ++i) {
+    if (sigaction(g_resumable_signals[i], &general_action, NULL) == -1) {
+      fprintf(stderr, "Failed to set signal handler for signal \"%s\"\n", strsignal(g_resumable_signals[i]));
+      exit(1);
+    }
   }
 
   organism_t *organism = (organism_t *)arg;
@@ -163,9 +168,9 @@ void spawn_organism(const char *genome_path) {
     exit(1);
   }
 
-  sleep(2);
+  // sleep(2);
 
-  // // TODO: Pull this up a level in the hierarchy and manage multiple organisms.
+  // TODO: Pull this up a level in the hierarchy and manage multiple organisms.
   for (size_t i = 0; i < 5; ++i) {
     usleep(500000);
     print_buffer(organism->buffer, PER_ORGANISM_BUFFER_SIZE);
